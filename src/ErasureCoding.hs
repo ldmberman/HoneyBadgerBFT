@@ -1,13 +1,15 @@
 module ErasureCoding (
       EncodingError(..)
     , encodeByteString
-    , decodeByteString
+    , decodeMatrix
+    , decodeShards
+    , decodeMessage
     ) where
 
 import           Control.Monad.Catch             (Exception, MonadCatch,
                                                   MonadThrow, handle, throwM,
                                                   try)
-import           Data.ByteString
+import           Data.ByteString                 (ByteString, append, empty)
 
 import           Data.Word                       (Word8)
 
@@ -54,7 +56,7 @@ encodeShards (shards, encoder) = do
         Right encoded -> return (shards V.++ encoded)
 
 matrixToShards :: (MonadThrow m, MonadCatch m) => RS.Matrix -> m EncodedShards
-matrixToShards matrix = return $ V.toList (V.map toByteString matrix)
+matrixToShards matrix = return $ decodeShards matrix
 
 -- Abstract the library errors away by raising a custom exception.
 handleErrors RS.InvalidDataSize = throwM $ EncodingError "Invalid data size"
@@ -62,11 +64,24 @@ handleErrors RS.InvalidShardSize = throwM $ EncodingError "Invalid shard size"
 handleErrors RS.EmptyShards = throwM $ EncodingError "Got empty shards :("
 handleErrors (RS.InvalidNumberOfShards typ num) = throwM $ EncodingError $ "Invalid number of shards of type " ++ show typ ++ ", " ++ show num
 
-decodeByteString :: (MonadThrow m, MonadCatch m) => ErasureScheme -> PartialShards -> m Message
-decodeByteString scheme shards =
+decodeMatrix :: (MonadThrow m, MonadCatch m) => ErasureScheme -> PartialShards -> m RS.Matrix
+decodeMatrix scheme shards =
     newEncoder scheme >>=
-    reconstruct (deformat shards) >>=
-    matrixToMessage
+    reconstruct (deformat shards)
+
+decodeMessage :: (MonadThrow m, MonadCatch m) => ErasureScheme -> RS.Matrix -> Int -> m Message
+decodeMessage scheme matrix size = handle handleErrors (decodeMessage' scheme matrix size)
+
+decodeMessage' scheme matrix size =
+    newEncoder scheme >>=
+    join matrix size
+
+join matrix size encoder =
+    RS.join encoder matrix size >>=
+    \v -> return $ toByteString v
+
+decodeShards :: RS.Matrix -> EncodedShards
+decodeShards = V.toList . (V.map toByteString)
 
 deformat shards = V.map (\v ->
     case v of
@@ -75,6 +90,3 @@ deformat shards = V.map (\v ->
 
 reconstruct :: (MonadThrow m, MonadCatch m) => V.Vector (Maybe (SV.Vector Word8)) -> RS.Encoder -> m RS.Matrix
 reconstruct shards encoder = handle handleErrors (RS.reconstruct encoder shards)
-
-matrixToMessage :: (MonadThrow m, MonadCatch m) => RS.Matrix -> m Message
-matrixToMessage matrix = return $ V.foldl append empty (V.map toByteString matrix)

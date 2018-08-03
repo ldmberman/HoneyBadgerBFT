@@ -4,50 +4,97 @@ module Main where
 import           Data.ByteString       (ByteString)
 import qualified Data.Vector           as V
 
-import           Control.Monad.Catch   (try)
+import           Control.Exception     (handle)
+
 import           Data.ByteString.Char8 (pack)
 
-import qualified ErasureCoding         as EC
+import           ErasureCoding         (EncodingError, decodeMatrix,
+                                        decodeMessage, decodeShards,
+                                        encodeByteString)
+import           MerkleTree            (DecodingError, MerkleProof,
+                                        mkMerkleProof, validateMerkleProof)
 
 main :: IO ()
 main =
     readInput >>= -- ask for a message and a coding scheme (N-f, f)
-    encodeAndPrint >>= -- encode the message and output the N shards
-    decodeAndPrint -- if successful, decode the message back from N-f shards
+    encode >>= -- encode the message and output the N shards
+    computeMerkleProofs >>= -- if successful, compute proofs of inclusion for the encoded parts composed into a Merkle tree
+    decode >>= -- if successful, decode the message back from N-f shards
+    verifyMerkleProofs -- if successful, verify proofs of inclusion for the decoded messages
 
 readInput :: IO (String, Int, Int)
 readInput = do
-    putStrLn "Enter a message: "
+    putStrLn "Enter a message:"
     message :: String <- getLine
-    putStrLn "Enter a number of data shards (N - f):"
+    putStrLn "\nEnter a number of data shards (N - f):"
     dataShards :: Int <- readLn
-    putStrLn "Enter a number of parity shards (f):"
+    putStrLn "\nEnter a number of parity shards (f):"
     parityShards :: Int <- readLn
-
     return (message, dataShards, parityShards)
 
-encodeAndPrint :: (String, Int, Int) -> IO (Either String ([ByteString], Int, Int))
-encodeAndPrint (message, dataShards, parityShards) = do
-    res <- try $ EC.encodeByteString (dataShards, parityShards) (pack message)
-    case res of
-        Left (EC.EncodingError msg) ->
-           return $ Left msg
-        Right encodedMessage        ->
-           return $ Right (encodedMessage, dataShards, parityShards)
+encode :: (String, Int, Int) -> IO (Maybe ([ByteString], Int, Int, Int))
+encode it = handle onEncodeFailure (encode' it)
 
-decodeAndPrint :: Either String ([ByteString], Int, Int) -> IO ()
-decodeAndPrint (Left msg)       = putStrLn msg
-decodeAndPrint (Right (encoded, d, s)) = do
-    putStrLn $ "Encoded the message into: " ++ show encoded
-    decodeAndPrint' (encoded, d, s)
+onEncodeFailure :: EncodingError -> IO (Maybe ([ByteString], Int, Int, Int))
+onEncodeFailure e = do
+    putStrLn $ "\nEncoding failed: " ++ show e ++ "\n"
+    return Nothing
 
-decodeAndPrint' :: ([ByteString], Int, Int) -> IO ()
-decodeAndPrint' (encoded, dataShards, parityShards) = do
-    let partialShards = (take parityShards (repeat Nothing)) ++ (map Just (take (dataShards + 1) (drop parityShards encoded)))
-    putStrLn $ "Decoding from: " ++ (show partialShards)
-    maybeDecoded <- try $ EC.decodeByteString (dataShards, parityShards) partialShards
-    case maybeDecoded of
-        Left (EC.EncodingError msg) ->
-            putStrLn msg
-        Right message ->
-            putStrLn $ "Decoded the message back: " ++ show message
+encode' (message, dataShards, parityShards) =
+    encodeByteString (dataShards, parityShards) (pack message) >>=
+    \encodedMessage -> do
+        putStrLn $ "\nEncoded: " ++ show encodedMessage ++ "\n"
+        return $ Just (encodedMessage, length message, dataShards, parityShards)
+
+computeMerkleProofs :: Maybe ([ByteString], Int, Int, Int) -> IO (Maybe ([ByteString], Int, Int, Int, [MerkleProof]))
+computeMerkleProofs Nothing = return Nothing
+computeMerkleProofs (Just (encoded, size, dataShards, parityShards)) = do
+    let proofs = map (mkMerkleProof encoded) encoded
+    showRoot proofs
+    return $ Just (encoded, size, dataShards, parityShards, proofs)
+
+showRoot []               = return ()
+showRoot ((_, root, _):_) = putStrLn $ "Merkle tree root hash: " ++ show root ++ "\n"
+
+decode :: Maybe ([ByteString], Int, Int, Int, [MerkleProof]) -> IO (Maybe ([ByteString], [MerkleProof]))
+decode Nothing   = return Nothing
+decode (Just it) = handle onDecodeFailure (decode' it)
+
+onDecodeFailure :: EncodingError -> IO (Maybe ([ByteString], [MerkleProof]))
+onDecodeFailure e = do
+    putStrLn $ "Decoding failed: " ++ show e
+    return Nothing
+
+decode' (encoded, size, dataShards, parityShards, proofs) =
+    let partialShards = (take parityShards (repeat Nothing)) ++ (map Just (take (dataShards + 1) (drop parityShards encoded))) in
+        decodeMatrix (dataShards, parityShards) partialShards >>=
+        \matrix -> do
+            putStrLn $ "Decoding from: " ++ (show partialShards) ++ "\n"
+            putStr $ "Decoded the message back: "
+            decodeMessage' (size, dataShards, parityShards) matrix proofs
+
+decodeMessage' (size, dataShards, parityShards) matrix proofs =
+    decodeMessage (dataShards, parityShards) matrix size >>=
+    \message -> do
+        putStrLn $ show message ++ "\n"
+        return $ Just (decodeShards matrix, proofs)
+
+verifyMerkleProofs :: Maybe ([ByteString], [MerkleProof]) -> IO ()
+verifyMerkleProofs Nothing = return ()
+verifyMerkleProofs (Just (leafs, proofs)) = mapM_ verifyMerkleProofs' (zip leafs proofs)
+
+verifyMerkleProofs' (leaf, proof) = do
+    putStrLn $ "Verifying proof " ++ show proof ++ " for the leaf " ++ show leaf ++ "."
+    verifyMerkleProof' proof
+
+verifyMerkleProof' proof =
+    handle onProofDecodeFailure (validateMerkleProof proof) >>=
+    \proof -> do
+        putStrLn $ "Successfully decoded the proof: " ++ show proof ++ "\n"
+        return ()
+
+onProofDecodeFailure :: DecodingError -> IO Bool
+onProofDecodeFailure e = do
+    putStrLn $ "Failed to decode the proof: " ++ show e ++ "\n"
+    return False
+
