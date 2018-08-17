@@ -25,7 +25,8 @@ unitTests = testGroup "RBC unit tests"
     [ testCase "Fails to decode invalid message" $ testFailsToDecodeInvalidMessage
      ,testCase "Reports unknown validator" $ testReportsUnknownValidator
      ,testCase "Rejects its own message" $ testRejectsItsOwnMessage
-     ,testCase "Broadcasts the input message" $ testBroadcastsInput ]
+     ,testCase "Broadcasts the input message" $ testBroadcastsInput
+     ,testCase "Echoes Val's" $ testEchoesVals ]
 
 testFailsToDecodeInvalidMessage = do
     let (out, _) = runState (receive (pack "bad message")) (setup oneValidator)
@@ -50,6 +51,7 @@ testRejectsItsOwnMessage = do
         Right o -> assertFailure $ "Did not reject its own message, but returned: " ++ show o
         Left (OwnMessageError _) -> return ()
         Left e -> assertFailure $ "Did not reject its own message, but raised: " ++ show e
+
 testBroadcastsInput = do
     mapM_ testBroadcastsInput' [twoValidators, threeValidators, fourValidators]
 
@@ -66,4 +68,13 @@ assertBroadcastsInput messages validators self = do
     mapM_ assertMessage messages where
         assertMessage (Val _, _) = return ()
         assertMessage msg = assertFailure $ "Broadcasted not `Val`: " ++ show msg
+
+sampleProof = (pack "proof", pack "root", pack "leaf")
+testEchoesVals = do
+    let (out, _) = runState (receive (encode (Val $ sampleProof, otherValidator))) (setup fourValidators)
+    (Broadcast messages) <- out
+    assertEqual "Did not broadcast to all validators" (map (\(_, v) -> v) messages) (filter (\v -> v /= validator) fourValidators)
+    mapM_ assertMessage messages where
+        assertMessage (Echo msg, _) = assertEqual ("Echoed message is different: " ++ show msg) msg sampleProof
+        assertMessage msg = assertFailure $ "Did not echoed the message, but returned: " ++ show msg
 
