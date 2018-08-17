@@ -21,6 +21,11 @@ Run the executable:
 stack exec HoneyBadgerBFT-exe
 ```
 
+Run tests:
+
+```
+stack test
+```
 
 ## Limitations
 
