@@ -48,6 +48,7 @@ data RBCState = RBCState {
      getValidators :: [Validator]
     ,getN          :: Int
     ,getF          :: Int
+    ,getSelf       :: Validator
     ,getEcho       :: [(Validator, Maybe MerkleProof)]
     ,getReady      :: [Validator]
     ,getReadySent  :: Bool
@@ -72,15 +73,18 @@ data RBCError =
       InputDecodingError String
     | ErasureCodingError String
     | UnknownValidator String
+    | OwnMessageError String
     deriving Show
 
 instance Exception RBCError
 
+-- The first validator is always considered to be "self".
 setup :: [Validator] -> RBCState
 setup validators = RBCState {
      getValidators = validators
     ,getN = length validators
     ,getF = getByzantineToleranceNumber (length validators)
+    ,getSelf = head validators
 }
 
 getByzantineToleranceNumber n | n <= 3 = 0
@@ -103,12 +107,16 @@ receive' (Input message, validator) = do
     state <- get
     if validator `elem` (getValidators state)
         then
-            return $ handle handleParseInputErrors (parseInput message state)
+            if validator == getSelf state
+                then
+                    return $ throwM $ OwnMessageError "Do not process my own messages"
+                else
+                    return $ handle handleParseInputErrors (parseInput message state)
         else
             return $ throwM $ UnknownValidator $ "Do not know this validator: " ++ show validator
 
 parseInput message state = do
     shards <- encodeByteString (getN state, getShardsNumber (getN state) (getF state)) message -- {sj}
-    return $ Broadcast (map (\(v, shard) -> (Val (mkMerkleProof shards shard), v)) (zip (getValidators state) shards))
+    return $ Broadcast (map (\(v, shard) -> (Val (mkMerkleProof shards shard), v)) (zip (drop 1 $ getValidators state) shards))
 
 handleParseInputErrors (EncodingError msg) = throwM $ ErasureCodingError msg
