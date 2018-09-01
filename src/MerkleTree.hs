@@ -1,5 +1,5 @@
 module MerkleTree (
-     DecodingError
+     DecodingError(..)
     ,MerkleProof(..)
     ,mkMerkleProof
     ,validateMerkleProof

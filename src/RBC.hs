@@ -85,12 +85,15 @@ setup validators = RBCState {
     ,getN = length validators
     ,getF = getByzantineToleranceNumber (length validators)
     ,getSelf = head validators
+    ,getEcho = []
+    ,getReady = []
+    ,getReadySent = False
 }
 
 getByzantineToleranceNumber n | n <= 3 = 0
 getByzantineToleranceNumber n = n `div` 3
 
-getShardsNumber n f = if n < 4 then 1 else n - f -- we want RBC to work in 1, 2, and 3- validator networks as well but it's only BFT when there are at least 4 validators
+getParityShardsNumber n f = if n < 4 then 1 else n - 2 * f -- we want RBC to work in 1, 2, and 3- validator networks as well but it's only BFT when there are at least 4 validators
 
 receive :: (MonadThrow m, MonadCatch m) => ByteString -> State RBCState (m Out)
 receive msg = case (decode msg) of
@@ -106,22 +109,29 @@ receive' (message, validator) = do
                 then
                     return $ throwM $ OwnMessageError "Do not process my own messages"
                 else
-                    return $ receive'' message state
+                    receive'' message validator
         else
             return $ throwM $ UnknownValidator $ "Do not know this validator: " ++ show validator
 
+parseInput message state = do
+    shards <- encodeByteString (getN state, getParityShardsNumber (getN state) (getF state)) message -- {sj}
+    return $ Broadcast (map (\(v, shard) -> (Val (mkMerkleProof shards shard), v)) (zip (drop 1 $ getValidators state) shards))
+
+handleParseInputErrors (EncodingError msg) = throwM $ ErasureCodingError msg
+
+receive'' :: (MonadThrow m, MonadCatch m) => In -> Validator -> State RBCState (m Out)
 -- • upon input(v) (if Pi = PSender):
 --   let {sj} j∈[N] be the blocks of an (N − 2f, N) erasure coding scheme applied to v
 --   let h be a Merkle tree root computed over {sj}
 --   send VAL(h,bj,sj) to each party Pj, where bj is the jth Merkle tree branch
-receive'' (Input message) state = handle handleParseInputErrors (parseInput message state)
+receive'' (Input message) _ = do
+    state <- get
+    return $ handle handleParseInputErrors (parseInput message state)
 
 -- • upon receiving VAL(h,bi,si) from PSender, multicast ECHO(h,bi,si)
-receive'' (Val proof) state = do
-    return $ Broadcast (map (\v -> (Echo proof, v)) (drop 1 $ getValidators state))
+receive'' (Val proof) _ = do
+    state <- get
+    return $ return $ Broadcast (map (\v -> (Echo proof, v)) (drop 1 $ getValidators state))
 
-parseInput message state = do
-    shards <- encodeByteString (getN state, getShardsNumber (getN state) (getF state)) message -- {sj}
-    return $ Broadcast (map (\(v, shard) -> (Val (mkMerkleProof shards shard), v)) (zip (drop 1 $ getValidators state) shards))
 
 handleParseInputErrors (EncodingError msg) = throwM $ ErasureCodingError msg
