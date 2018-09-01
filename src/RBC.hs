@@ -31,14 +31,15 @@ import           Data.ByteString     (ByteString)
 import           Data.Serialize      (Serialize, decode)
 
 import           Control.Monad.Catch (Exception (..), MonadCatch, MonadThrow,
-                                      handle, throwM)
+                                      handle, throwM, try)
 import           Control.Monad.State
 
 import           ErasureCoding       (EncodingError (..), encodeByteString)
 
 import           GHC.Generics        (Generic)
 
-import           MerkleTree          (MerkleProof, mkMerkleProof)
+import           MerkleTree          (DecodingError (..), MerkleProof,
+                                      mkMerkleProof, validateMerkleProof)
 
 type Validator = ByteString
 
@@ -49,7 +50,7 @@ data RBCState = RBCState {
     ,getN          :: Int
     ,getF          :: Int
     ,getSelf       :: Validator
-    ,getEcho       :: [(Validator, Maybe MerkleProof)]
+    ,getEcho       :: [(Validator, MerkleProof)]
     ,getReady      :: [Validator]
     ,getReadySent  :: Bool
 }
@@ -66,6 +67,7 @@ instance Serialize In
 data Out =
       Broadcast [(In, Validator)]
     | Output ByteString
+    | StoreEcho (MerkleProof, Validator)
     | None
     deriving Show
 
@@ -74,6 +76,7 @@ data RBCError =
     | ErasureCodingError String
     | UnknownValidator String
     | OwnMessageError String
+    | ProofDecodingError String
     deriving Show
 
 instance Exception RBCError
@@ -132,6 +135,26 @@ receive'' (Input message) _ = do
 receive'' (Val proof) _ = do
     state <- get
     return $ return $ Broadcast (map (\v -> (Echo proof, v)) (drop 1 $ getValidators state))
+
+-- • upon receiving ECHO(h,bj,sj) from party Pj,
+--   check that bj is a valid Merkle branch for root h and leaf sj, and otherwise discard
+receive'' (Echo proof@(_, root, _)) validator = do
+    state <- get
+    if validator `elem` (map fst (getEcho state)) -- collect messages from distinct validators
+        then
+            return $ return None
+        else
+            return $ validateEcho proof validator state
+
+validateEcho proof validator state = do
+    maybeValid <- try $ validateMerkleProof proof
+    case maybeValid of
+        Left (DecodingError msg) -> throwM $ ProofDecodingError msg
+        Right isValid -> if isValid
+            then
+                return $ StoreEcho (proof, validator)
+            else
+                return None
 
 
 handleParseInputErrors (EncodingError msg) = throwM $ ErasureCodingError msg
