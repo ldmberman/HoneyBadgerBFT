@@ -2,6 +2,7 @@
 module Main where
 
 import           Data.ByteString       (ByteString)
+import           Data.List             (sort)
 import qualified Data.Vector           as V
 
 import           Control.Exception     (handle)
@@ -49,7 +50,7 @@ encode' (message, dataShards, parityShards) =
 computeMerkleProofs :: Maybe ([ByteString], Int, Int, Int) -> IO (Maybe ([ByteString], Int, Int, Int, [MerkleProof]))
 computeMerkleProofs Nothing = return Nothing
 computeMerkleProofs (Just (encoded, size, dataShards, parityShards)) = do
-    let proofs = map (mkMerkleProof encoded) encoded
+    let proofs = map (mkMerkleProof (sort encoded)) encoded
     showRoot proofs
     return $ Just (encoded, size, dataShards, parityShards, proofs)
 

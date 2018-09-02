@@ -28,13 +28,12 @@ module RBC where
 
 import           Data.ByteString     (ByteString)
 
+import           Data.List           (sort)
+
 import           Data.Serialize      (Serialize, decode)
 
-import           Control.Monad.Catch (Exception (..), MonadCatch, MonadThrow,
-                                      handle, throwM, try)
 import           Control.Monad.State
 
-import           ErasureCoding       (EncodingError (..), encodeByteString)
 
 import           GHC.Generics        (Generic)
 
@@ -118,8 +117,8 @@ receive' (message, validator) = do
             return $ throwM $ UnknownValidator $ "Do not know this validator: " ++ show validator
 
 parseInput message state = do
-    shards <- encodeByteString (getN state, getParityShardsNumber (getN state) (getF state)) message -- {sj}
-    return $ Broadcast (map (\(v, shard) -> (Val (mkMerkleProof shards shard), v)) (zip (drop 1 $ getValidators state) shards))
+    shards <- encodeByteString (getErasureCodingScheme (getN state)) message -- {sj}
+    return $ Broadcast (map (\(v, shard) -> (Val (mkMerkleProof (sort shards) shard), v)) (zip (drop 1 $ getValidators state) shards))
 
 handleParseInputErrors (EncodingError msg) = throwM $ ErasureCodingError msg
 
