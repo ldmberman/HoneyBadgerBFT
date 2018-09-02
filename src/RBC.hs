@@ -98,12 +98,12 @@ getByzantineToleranceNumber n = n `div` 3
 getErasureCodingScheme n = (max (n - 2 * f) 2, max (2 * f) 2) -- we want RBC to work in 1, 2, and 3- validator networks as well but it's only BFT when there are at least 4 validators
     where f = getByzantineToleranceNumber n
 
-receive :: (MonadThrow m, MonadCatch m) => ByteString -> State RBCState (m Out)
+receive :: MonadCatch m => ByteString -> State RBCState (m Out)
 receive msg = case (decode msg) of
     Left msg      -> return $ throwM $ InputDecodingError msg
     Right decoded -> receive' decoded
 
-receive' :: (MonadThrow m, MonadCatch m) => (In, Validator) -> State RBCState (m Out)
+receive' :: MonadCatch m => (In, Validator) -> State RBCState (m Out)
 receive' (message, validator) = do
     state <- get
     if validator `elem` (getValidators state)
@@ -122,7 +122,7 @@ parseInput message state = do
 
 handleParseInputErrors (EncodingError msg) = throwM $ ErasureCodingError msg
 
-receive'' :: (MonadThrow m, MonadCatch m) => In -> Validator -> State RBCState (m Out)
+receive'' :: MonadCatch m => In -> Validator -> State RBCState (m Out)
 -- • upon input(v) (if Pi = PSender):
 --   let {sj} j∈[N] be the blocks of an (N − 2f, N) erasure coding scheme applied to v
 --   let h be a Merkle tree root computed over {sj}

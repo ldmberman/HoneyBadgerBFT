@@ -9,8 +9,7 @@ import           Data.ByteString        (ByteString)
 
 import           Data.Serialize         (decode, encode)
 
-import           Control.Monad.Catch    (Exception (..), MonadCatch, MonadThrow,
-                                         throwM)
+import           Control.Monad.Catch    (Exception (..), MonadCatch, throwM)
 
 import qualified Crypto.Hash.MerkleTree as MT
 
@@ -26,12 +25,12 @@ mkMerkleProof leafs leaf = (proof, rootHash, leaf) where
     proof = encode $ MT.merkleProof tree (MT.mkLeafRootHash leaf)
     rootHash = MT.mtHash tree
 
-validateMerkleProof :: (MonadThrow m, MonadCatch m) => MerkleProof -> m Bool
+validateMerkleProof :: MonadCatch m => MerkleProof -> m Bool
 validateMerkleProof proof =
     decodeProof proof >>=
     validateMerkleProof'
 
-decodeProof :: (MonadThrow m, MonadCatch m) => MerkleProof -> m (MT.MerkleProof a, ByteString, ByteString)
+decodeProof :: MonadCatch m => MerkleProof -> m (MT.MerkleProof a, ByteString, ByteString)
 decodeProof (proof, root, leaf) = case (decode proof) of
     Left msg      -> throwM $ DecodingError msg
     Right decoded -> return (decoded, root, leaf)
