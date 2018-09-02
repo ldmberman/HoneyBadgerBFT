@@ -26,9 +26,9 @@ readInput :: IO (String, Int, Int)
 readInput = do
     putStrLn "Enter a message:"
     message :: String <- getLine
-    putStrLn "\nEnter a number of data shards (N - f):"
+    putStrLn "\nEnter a number of data shards (N - 2f):"
     dataShards :: Int <- readLn
-    putStrLn "\nEnter a number of parity shards (f):"
+    putStrLn "\nEnter a number of parity shards (2f):"
     parityShards :: Int <- readLn
     return (message, dataShards, parityShards)
 
@@ -70,6 +70,7 @@ decode' (encoded, size, dataShards, parityShards, proofs) =
         decodeMatrix (dataShards, parityShards) partialShards >>=
         \matrix -> do
             putStrLn $ "Decoding from: " ++ (show partialShards) ++ "\n"
+            putStrLn $ "Decoded shards: " ++ show (decodeShards matrix)
             putStr $ "Decoded the message back: "
             decodeMessage' (size, dataShards, parityShards) matrix proofs
 

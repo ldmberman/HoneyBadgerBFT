@@ -96,7 +96,8 @@ setup validators = RBCState {
 getByzantineToleranceNumber n | n <= 3 = 0
 getByzantineToleranceNumber n = n `div` 3
 
-getParityShardsNumber n f = if n < 4 then 1 else n - 2 * f -- we want RBC to work in 1, 2, and 3- validator networks as well but it's only BFT when there are at least 4 validators
+getErasureCodingScheme n = (max (n - 2 * f) 2, max (2 * f) 2) -- we want RBC to work in 1, 2, and 3- validator networks as well but it's only BFT when there are at least 4 validators
+    where f = getByzantineToleranceNumber n
 
 receive :: (MonadThrow m, MonadCatch m) => ByteString -> State RBCState (m Out)
 receive msg = case (decode msg) of
