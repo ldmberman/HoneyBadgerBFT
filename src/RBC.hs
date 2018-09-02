@@ -29,11 +29,16 @@ module RBC where
 import           Data.ByteString     (ByteString)
 
 import           Data.List           (sort)
+import qualified Data.Map.Strict     as Map
 
 import           Data.Serialize      (Serialize, decode)
 
+import           Control.Monad.Catch (Exception (..), MonadCatch, MonadMask,
+                                      handle, onException, throwM, try)
 import           Control.Monad.State
 
+import           ErasureCoding       (EncodingError (..), decodeMatrix,
+                                      decodeShards, encodeByteString)
 
 import           GHC.Generics        (Generic)
 
@@ -52,14 +57,14 @@ data RBCState = RBCState {
     ,getEcho       :: [(Validator, MerkleProof)]
     ,getReady      :: [Validator]
     ,getReadySent  :: Bool
-}
+} deriving Show
 
 data In =
       Input ByteString
     | Val MerkleProof
     | Echo MerkleProof
-    | Ready MerkleProof
-    deriving (Generic, Show)
+    | Ready ByteString
+    deriving (Eq, Generic, Show)
 
 instance Serialize In
 
@@ -156,5 +161,51 @@ validateEcho proof validator state = do
             else
                 return None
 
+storeEcho :: MonadMask m => MerkleProof -> Validator -> State RBCState (m Out)
+storeEcho proof validator = do
+    state <- get
+    put $ state {
+        getEcho = (getEcho state) ++ [(validator, proof)]
+    }
+    countEchoes proof
 
-handleParseInputErrors (EncodingError msg) = throwM $ ErasureCodingError msg
+countEchoes :: MonadMask m => MerkleProof -> State RBCState (m Out)
+countEchoes proof = do
+    state <- get
+    -- • upon receiving valid ECHO(h, ·, ·) messages from N − f distinct parties,
+    let received = getEcho state
+    if length received < (getN state) - (getF state) || getReadySent state
+        then
+            return $ return None
+        else
+            interpolateEchoes proof
+
+interpolateEchoes :: MonadMask m => MerkleProof -> State RBCState (m Out)
+interpolateEchoes proof = do
+    state <- get
+    let echoes = Map.fromListWith (++) (map (\(_, (_, root, leaf)) -> (root, [leaf])) (getEcho state))
+    --   - interpolate {s′j } from any N − 2f leaves received
+    let (dataShards, parityShards) = getErasureCodingScheme $ getN state
+    let subsets = [(take dataShards $ repeat Nothing) ++ take parityShards (map Just subset) | (_, subset) <- (Map.toList echoes), length subset >= parityShards]
+    return $ interpolateEchoes' subsets proof state
+
+interpolateEchoes' :: MonadMask m => [[Maybe ByteString]] -> MerkleProof -> RBCState -> m Out
+interpolateEchoes' [] _ _ = return None
+interpolateEchoes' (subset:[]) proof state = interpolateEchoes'' subset proof state
+interpolateEchoes' (subset:rest) proof state = onException (interpolateEchoes'' subset proof state) (interpolateEchoes' rest proof state)
+
+interpolateEchoes'' :: MonadMask m => [Maybe ByteString] -> MerkleProof -> RBCState -> m Out
+interpolateEchoes'' echoes proof@(_, gotRoot, _) state = do
+    maybeDecoded <- try $ decodeMatrix (getErasureCodingScheme $ getN state) echoes
+    case maybeDecoded of
+        Left (EncodingError _) -> return None
+        Right matrix ->
+            --   – recompute Merkle root h′ and if h′ ̸= h then abort
+            --   – if READY(h) has not yet been sent, multicast READY(h)
+            let shards = decodeShards matrix
+                (_, root, _) = mkMerkleProof (sort shards) (head shards) in
+            if root /= gotRoot
+                then
+                    return None
+                else
+                    return $ Broadcast (map (\v -> (Ready gotRoot, v)) (drop 1 $ getValidators state))
