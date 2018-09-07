@@ -1,7 +1,17 @@
 {-# LANGUAGE DefaultSignatures #-}
 {-# LANGUAGE DeriveGeneric     #-}
 
-module RBC where
+module RBC (
+     In(..)
+    ,Out(..)
+    ,RBCState(..)
+    ,RBCError(..)
+    ,setup
+    ,receive
+    ,storeEcho
+    ,markReadySent
+    ,storeReady
+    ) where
 
 -- Reliable Broadcast
 --
@@ -55,7 +65,7 @@ data RBCState = RBCState {
     ,getF          :: Int
     ,getSelf       :: Validator
     ,getEcho       :: [(Validator, MerkleProof)]
-    ,getReady      :: [Validator]
+    ,getReady      :: [(Validator, ByteString)]
     ,getReadySent  :: Bool
 } deriving Show
 
@@ -72,6 +82,7 @@ data Out =
       Broadcast [(In, Validator)]
     | Output ByteString
     | StoreEcho (MerkleProof, Validator)
+    | StoreReady (ByteString, Validator)
     | None
     deriving Show
 
@@ -151,6 +162,14 @@ receive'' (Echo proof@(_, root, _)) validator = do
         else
             return $ validateEcho proof validator state
 
+receive'' (Ready root) validator = do
+    state <- get
+    if validator `elem` (map fst (getReady state)) -- collect messages from distinct validators
+        then
+            return $ return None
+        else
+            return $ return $ StoreReady (root, validator)
+
 validateEcho proof validator state = do
     maybeValid <- try $ validateMerkleProof proof
     case maybeValid of
@@ -165,16 +184,49 @@ storeEcho :: MonadMask m => MerkleProof -> Validator -> State RBCState (m Out)
 storeEcho proof validator = do
     state <- get
     put $ state {
-        getEcho = (getEcho state) ++ [(validator, proof)]
+        getEcho = getEcho state ++ [(validator, proof)]
     }
-    countEchoes proof
+    if getReadySent state
+        then return $ return None
+        else countEchoes proof
+
+markReadySent :: State RBCState ()
+markReadySent = do
+    state <- get
+    put state {
+        getReadySent = True
+    }
+
+-- • upon receiving f + 1 matching READY(h) messages, if READY has not yet been sent, multicast READY(h)
+storeReady :: MonadMask m => ByteString -> Validator -> State RBCState (m Out)
+storeReady root validator = do
+    state <- get
+    put state {
+        getReady = getReady state ++ [(validator, root)]
+    }
+    if getReadySent state
+        then return $ return None
+        else countReadies
+
+countReadies :: MonadMask m => State RBCState (m Out)
+countReadies = do
+    state <- get
+    let received = Map.fromListWith (++) (map (\(v, r) -> (r, [v])) $ getReady state)
+    let matchingSubsets = [subset | subset@(_, validators) <- Map.toList received, length validators > getF state]
+    if length matchingSubsets > 1
+        then return $ return None
+        else if length matchingSubsets == 0
+            then
+                return $ return None
+            else
+                return $ broadcastMessage (Ready (fst $ head $ matchingSubsets)) state
 
 countEchoes :: MonadMask m => MerkleProof -> State RBCState (m Out)
 countEchoes proof = do
     state <- get
     -- • upon receiving valid ECHO(h, ·, ·) messages from N − f distinct parties,
     let received = getEcho state
-    if length received < (getN state) - (getF state) || getReadySent state
+    if length received < getN state - getF state
         then
             return $ return None
         else
@@ -186,7 +238,7 @@ interpolateEchoes proof = do
     let echoes = Map.fromListWith (++) (map (\(_, (_, root, leaf)) -> (root, [leaf])) (getEcho state))
     --   - interpolate {s′j } from any N − 2f leaves received
     let (dataShards, parityShards) = getErasureCodingScheme $ getN state
-    let subsets = [(take dataShards $ repeat Nothing) ++ take parityShards (map Just subset) | (_, subset) <- (Map.toList echoes), length subset >= parityShards]
+    let subsets = [(take dataShards $ repeat Nothing) ++ take parityShards (map Just subset) | (_, subset) <- Map.toList echoes, length subset >= parityShards]
     return $ interpolateEchoes' subsets proof state
 
 interpolateEchoes' :: MonadMask m => [[Maybe ByteString]] -> MerkleProof -> RBCState -> m Out
@@ -208,4 +260,7 @@ interpolateEchoes'' echoes proof@(_, gotRoot, _) state = do
                 then
                     return None
                 else
-                    return $ Broadcast (map (\v -> (Ready gotRoot, v)) (drop 1 $ getValidators state))
+                    broadcastMessage (Ready gotRoot) state
+
+broadcastMessage :: MonadMask m => In -> RBCState -> m Out
+broadcastMessage msg state = return $ Broadcast (map (\v -> (msg, v)) (drop 1 $ getValidators state))

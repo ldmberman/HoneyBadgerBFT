@@ -1,18 +1,18 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 module RBCTest where
 
-import           Control.Monad.Catch   (try)
+import           Control.Monad.Catch   (MonadMask, try)
 import           Control.Monad.State   (runState)
 
 import           Data.ByteString.Char8 (pack)
 import           Data.Serialize        (encode)
 
 import           RBC                   (In (..), Out (..), RBCError (..),
-                                        getEcho, receive, setup, storeEcho)
+                                        RBCState (..), markReadySent, receive,
+                                        setup, storeEcho, storeReady)
 
 import           Test.Tasty            (testGroup)
-import           Test.Tasty.HUnit      (assertEqual, assertFailure, testCase,
-                                        (@?))
+import           Test.Tasty.HUnit      (assertEqual, assertFailure, testCase)
 
 validator = pack "validator-1"
 otherValidator = pack "validator-2"
@@ -31,7 +31,10 @@ unitTests = testGroup "RBC unit tests"
      ,testCase "Fails to parse improperly built proofs" testFailsToParseImproperlyBuiltProofs
      ,testCase "Ignores invalid proofs" $ testIgnoresInvalidProofs
      ,testCase "Collects messages from distinct validators" $ testCollectsMessagesFromDistinctValidators
-     ,testCase "Stores echoes" $ testStoresEchoes ]
+     ,testCase "Stores echoes" $ testStoresEchoes
+     ,testCase "Does not re-broadcast Ready" $ testDoesNotReBroadcastReady
+     ,testCase "Broadcasts Ready after receiving matching Ready" $ testBroadcastsReadyAfterReceivingMatchingReady
+     ,testCase "Does not broadcast mismatching Ready" $ testDoesNotBroadcastMismatchingReady ]
 
 testFailsToDecodeInvalidMessage = do
     let (out, _) = runState (receive (pack "bad message")) (setup oneValidator)
@@ -142,3 +145,57 @@ testStoresEchoes = do
         o -> assertFailure $ "Did not command to interpolate but returned: " ++ show o
 
     assertEqual "Did not store all echoes correctly" (zip (drop 1 fourValidators) [validProof, secondValidProof, thirdValidProof]) (getEcho stateAfterThreeEchoes)
+
+buildStateWithTwoEchoes = do
+    let (out, s) = runState (storeEcho validProof $ fourValidators !! 1) (setup fourValidators)
+    _ <- out
+    let (out, state) = runState (storeEcho secondValidProof $ fourValidators !! 2) s
+    _ <- out
+    return state
+
+testDoesNotReBroadcastReady = do
+    state <- buildStateWithTwoEchoes
+
+    let (_, stateAfterReadySent) = runState markReadySent state
+    let (maybeOut, _) = runState (storeEcho thirdValidProof $ fourValidators !! 3) stateAfterReadySent
+    out <- maybeOut
+    case out of
+        None -> return ()
+        _ -> assertFailure $ "Did not ignore yet another Ready but returned: " ++ show out
+
+testBroadcastsReadyAfterReceivingMatchingReady = do
+    let (out, stateAfterOneReady) = runState (storeReady (encode "A root") $ fourValidators !! 1) (setup fourValidators)
+    result <- out
+    case result of
+        None -> return ()
+        o -> assertFailure $ "Did not just store Ready but returned: " ++ show o
+
+    let (out, stateAfterTwoReadies) = runState (storeReady (encode "A root") $ fourValidators !! 2) stateAfterOneReady
+    result <- out
+    case result of
+        Broadcast messages -> assertEqual "Did not broadcast the correct messages" (map (\v -> (Ready (encode "A root"), v)) $ drop 1 fourValidators) messages
+        o -> assertFailure $ "Did not broadcast messages but returned:  " ++ show o
+
+    let (_, afterReadySent) = runState markReadySent stateAfterTwoReadies
+    let (out, _) = runState (storeReady (encode "A root") $ fourValidators !! 3) afterReadySent
+    result <- out
+    case result of
+        None -> return ()
+        o -> assertFailure $ "Did not ignore yet another Ready but returned: " ++ show o
+
+testDoesNotBroadcastMismatchingReady = do
+    let root = encode "A root"
+    let mismatchingRoot = encode "A mismatching root"
+
+    let state = (setup fourValidators) {
+        getReady = [
+             (fourValidators !! 1, root)
+            ,(fourValidators !! 2, root)
+            ,(fourValidators !! 1, mismatchingRoot)
+        ]
+    }
+    let (out, _) = runState (storeReady mismatchingRoot $ fourValidators !! 2) state
+    result <- out
+    case result of
+        None -> return ()
+        o -> assertFailure $ "Did not ignore mismatching Ready but returned: " ++ show o
