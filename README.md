@@ -8,6 +8,10 @@ The implementation is WIP.
 
 Get [The Haskell Tool Stack](https://docs.haskellstack.org/en/stable/README/).
 
+Install [Rust](https://www.rust-lang.org/en-US/install.html).
+
+Install [LLVM 3.7](http://releases.llvm.org/download.html).
+
 Clone the repo, enter the folder, and build the project:
 
 ```
@@ -29,17 +33,6 @@ Run tests:
 ```
 ./run_tests
 ```
-
-## Troubleshooting
-
-```
-no location info>: error:
-        Warning: Couldn't figure out LLVM version!
-                 Make sure you have installed LLVM 3.7
-    ghc: could not execute: opt
-```
-
-Make sure `llc` and `lli` are on your PATH. On MacOS, you are likely to find them in `/usr/local/opt/llvm\@3.7/lib/llvm-3.7/bin`.
 
 ## Limitations
 
