@@ -1,1 +1,1 @@
-stack --extra-lib-dirs $PWD/threshold_crypto_haskell/target/debug/ build --ghc-options -lthreshold_crypto_haskell
+stack --extra-lib-dirs $PWD/threshold_crypto_ffi/target/debug/ build --ghc-options -lthreshold_crypto_ffi
