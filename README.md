@@ -34,6 +34,12 @@ Run tests:
 ./run_tests
 ```
 
+## Development
+
+### Style Guide
+
+Use Stylish Haskell to format the code.
+
 ## Limitations
 
 - The maximum number of shards supported by the erasure coding scheme library we use is 257. We need to find a way around it to accommodate networks with a much bigger number of validators.
